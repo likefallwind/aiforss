@@ -1,543 +1,566 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-算法偏见检测与公平性度量 - 参考答案实现
+算法偏见检测与公平性度量
 课程《人工智能赋能社会科学》第「算法偏见与数据治理」课配套项目
 
-本文件提供了招聘筛选场景下的偏见检测与公平性度量的完整实现。
-包含：带偏见数据生成、公平性指标计算、偏见消解三大模块。
+参考实现：完整的偏见检测与公平性度量功能
 """
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, precision_score, recall_score
-import warnings
-warnings.filterwarnings('ignore')
+from typing import Dict, List, Tuple, Any
 
 
-def generate_biased_recruitment_data(n_samples=1000, random_state=42):
+def load_data() -> pd.DataFrame:
     """
-    生成带偏见的招聘模拟数据集
+    加载模拟招聘数据集。
     
-    该函数模拟一家科技公司过去十年的招聘数据，其中技术岗位男性占比80%。
-    即使候选人的能力分布是均衡的，录用决策也会受到性别的影响。
+    数据集包含以下字段：
+    - gender: 性别 (0=女, 1=男)
+    - region: 地区 (0=欠发达地区, 1=发达地区)
+    - age: 年龄
+    - education: 教育水平 (1-5)
+    - experience: 工作经验年限
+    - skill_score: 技能评分
+    - decision: 真实决策 (0=拒绝, 1=通过)
+    - prediction: 模型预测 (0=拒绝, 1=通过)
     
-    参数:
-        n_samples (int): 生成的样本数量
-        random_state (int): 随机种子，确保结果可复现
-    
-    返回:
-        pd.DataFrame: 包含以下列的数据框
-            - gender: 性别 ('male' 或 'female')
-            - skill_score: 技能得分 (0-100)
-            - experience_years: 工作年限 (0-20)
-            - education_level: 教育水平 (1-3)
-            - interview_score: 面试分数 (0-100)
-            - hired: 是否录用 (0 或 1)
+    Returns:
+        pd.DataFrame: 包含所有数据的数据框
     """
-    np.random.seed(random_state)
+    np.random.seed(42)
+    n_samples = 1000
     
-    # 创建空数据框
-    data = pd.DataFrame()
+    # 生成敏感属性
+    gender = np.random.binomial(1, 0.6, n_samples)  # 60%男性
+    region = np.random.binomial(1, 0.5, n_samples)  # 50%发达地区
     
-    # 性别分布：男性80%，女性20%（模拟技术岗位的历史性别比例）
-    # 这种不平等的性别分布本身就是系统性偏见的一部分
-    gender_probs = [0.8, 0.2]
-    data['gender'] = np.random.choice(['male', 'female'], size=n_samples, p=gender_probs)
+    # 生成其他特征
+    age = np.random.normal(30, 5, n_samples)
+    education = np.random.randint(1, 6, n_samples)
+    experience = np.random.exponential(5, n_samples)
+    skill_score = 0.5 * education + 0.3 * experience + 0.2 * region + \
+                  np.random.normal(0, 1, n_samples)
     
-    # 能力特征：与性别无关，均匀分布
-    # 这些特征应该反映候选人的真实能力，与性别无关
-    # 技能得分：正态分布，均值70，标准差15
-    data['skill_score'] = np.random.normal(70, 15, n_samples).clip(0, 100)
+    # 生成真实决策（包含偏见）
+    # 偏见来源1：性别影响
+    bias_gender = -0.3 * gender + 0.2  # 女性偏见系数
+    # 偏见来源2：地区影响
+    bias_region = 0.4 * region
     
-    # 工作年限：指数分布，模拟大多数人有较短的工作经验
-    data['experience_years'] = np.random.exponential(5, n_samples).clip(0, 20)
+    # 计算决策概率
+    score = 0.3 * education + 0.2 * experience + 0.5 * skill_score + \
+            bias_gender + bias_region - 5
+    prob_decision = 1 / (1 + np.exp(-score))
+    decision = (np.random.random(n_samples) < prob_decision).astype(int)
     
-    # 教育水平：1=专科，2=本科，3=研究生
-    data['education_level'] = np.random.choice([1, 2, 3], size=n_samples, p=[0.2, 0.5, 0.3])
+    # 生成模型预测（模型可能学到并放大偏见）
+    bias_magnified = -0.4 * gender + 0.3 * region  # 放大偏见
+    pred_score = 0.3 * education + 0.2 * experience + 0.5 * skill_score + \
+                 bias_magnified - 5
+    pred_prob = 1 / (1 + np.exp(-pred_score))
+    prediction = (np.random.random(n_samples) < pred_prob).astype(int)
     
-    # 面试分数：正态分布，均值72，标准差12
-    data['interview_score'] = np.random.normal(72, 12, n_samples).clip(0, 100)
-    
-    # 录用决策：基于能力，但加入性别偏见
-    # 关键机制：相同能力的男性更容易被录用，这就是历史偏见的体现
-    
-    # 计算综合能力得分（用于决定录用）
-    ability_score = (
-        data['skill_score'] * 0.3 +      # 技能得分权重30%
-        data['interview_score'] * 0.4 +   # 面试分数权重40%（面试环节可能存在偏见）
-        data['experience_years'] * 2 +    # 每年经验加2分
-        data['education_level'] * 5       # 教育水平每级加5分
-    )
-    
-    # 基础录用概率（基于能力标准化到0-1）
-    ability_min = ability_score.min()
-    ability_max = ability_score.max()
-    base_prob = (ability_score - ability_min) / (ability_max - ability_min)
-    
-    # 加入性别偏见参数：
-    # 男性获得+0.25的加成（更容易被录用）
-    # 女性获得-0.15的惩罚（更难被录用）
-    # 这些参数模拟了历史数据中存在的性别歧视
-    gender_bias = data['gender'].map({'male': 0.25, 'female': -0.15})
-    
-    # 最终录用概率（考虑能力和偏见）
-    final_prob = (base_prob + gender_bias).clip(0, 1)
-    
-    # 根据概率生成录用标签
-    data['hired'] = (np.random.random(n_samples) < final_prob).astype(int)
-    
-    # 验证偏见的存在：打印录用率统计
-    print(f"  [数据生成验证] 男性录用率: {data[data['gender']=='male']['hired'].mean():.2%}")
-    print(f"  [数据生成验证] 女性录用率: {data[data['gender']=='female']['hired'].mean():.2%}")
-    print(f"  [数据生成验证] 录用率差异: {abs(data[data['gender']=='male']['hired'].mean() - data[data['gender']=='female']['hired'].mean()):.2%}")
-    
-    return data
-
-
-def train_model(data, target_col='hired', test_size=0.2, random_state=42):
-    """
-    训练逻辑回归模型进行招聘筛选
-    
-    参数:
-        data (pd.DataFrame): 包含特征和标签的数据框
-        target_col (str): 目标列名
-        test_size (float): 测试集比例
-        random_state (int): 随机种子
-    
-    返回:
-        tuple: (训练好的模型, 测试集特征, 测试集标签, 性别测试集, 标准化器)
-    """
-    # 准备特征和标签
-    feature_cols = ['skill_score', 'experience_years', 'education_level', 'interview_score']
-    X = data[feature_cols]
-    y = data[target_col]
-    
-    # 保存性别信息用于公平性评估
-    gender = data['gender']
-    
-    # 分割数据集，使用分层抽样确保训练集和测试集中性别比例一致
-    X_train, X_test, y_train, y_test, gender_train, gender_test = train_test_split(
-        X, y, gender, test_size=test_size, random_state=random_state, stratify=y
-    )
-    
-    # 特征标准化（对逻辑回归很重要）
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    # 训练逻辑回归模型
-    model = LogisticRegression(random_state=random_state, max_iter=1000)
-    model.fit(X_train_scaled, y_train)
-    
-    return model, X_test_scaled, y_test, gender_test, scaler
-
-
-def compute_fairness_metrics(model, X_test, y_test, gender_test, protected_attr='gender'):
-    """
-    计算公平性度量指标
-    
-    该函数计算三个主要的公平性指标：
-    1. 统计均等 (Statistical Parity/Demographic Parity)
-       - 不同群体被录用比例的差异
-    2. 均等机会 (Equal Opportunity)
-       - 在合格候选人中，不同群体的录用率差异
-    3. 均等几率 (Equalized Odds)
-       - 同时考虑真正例率和假正例率的公平性
-    
-    参数:
-        model: 训练好的分类模型
-        X_test: 测试集特征
-        y_test: 测试集真实标签
-        gender_test: 测试集性别信息
-        protected_attr (str): 受保护的属性名
-    
-    返回:
-        dict: 包含各公平性指标的字典
-    """
-    # 预测结果
-    y_pred = model.predict(X_test)
-    
-    # 创建结果DataFrame便于分析
-    results_df = pd.DataFrame({
-        'gender': gender_test.values,
-        'y_true': y_test.values,
-        'y_pred': y_pred
+    df = pd.DataFrame({
+        'gender': gender,
+        'region': region,
+        'age': age,
+        'education': education,
+        'experience': experience,
+        'skill_score': skill_score,
+        'decision': decision,
+        'prediction': prediction
     })
-    
-    metrics = {}
-    
-    # === 统计均等 (Statistical Parity / Demographic Parity) ===
-    # 定义：不同受保护群体被模型预测为正例的比例差异
-    # 计算公式：|P(Ŷ=1|G=male) - P(Ŷ=1|G=female)|
-    # 衡量标准：模型对不同群体给出正面预测的比例是否一致
-    
-    # 计算男性被预测为录用的比例
-    male_data = results_df[results_df['gender'] == 'male']
-    male_pred_positive = (male_data['y_pred'] == 1).mean()
-    
-    # 计算女性被预测为录用的比例
-    female_data = results_df[results_df['gender'] == 'female']
-    female_pred_positive = (female_data['y_pred'] == 1).mean()
-    
-    # 计算差异
-    sp_difference = abs(male_pred_positive - female_pred_positive)
-    
-    metrics['statistical_parity'] = {
-        'male_positive_rate': male_pred_positive,
-        'female_positive_rate': female_pred_positive,
-        'difference': sp_difference,
-        'description': '统计均等：不同性别群体的录用预测比例差异'
-    }
-    
-    # === 均等机会 (Equal Opportunity) ===
-    # 定义：在真实标签为正例的群体中，不同群体的真阳性率(TPR)差异
-    # 计算公式：|TPR_male - TPR_female|，其中 TPR = P(Ŷ=1|Y=1)
-    # 衡量标准：在真正合格的候选人中，录用机会是否平等
-    # 这个指标关注"对的人"是否都有同等的机会被选中
-    
-    # 计算男性在合格候选人中的录用率（真阳性率）
-    male_qualified = results_df[(results_df['gender'] == 'male') & (results_df['y_true'] == 1)]
-    male_tpr = (male_qualified['y_pred'] == 1).mean() if len(male_qualified) > 0 else 0.0
-    
-    # 计算女性在合格候选人中的录用率（真阳性率）
-    female_qualified = results_df[(results_df['gender'] == 'female') & (results_df['y_true'] == 1)]
-    female_tpr = (female_qualified['y_pred'] == 1).mean() if len(female_qualified) > 0 else 0.0
-    
-    # 计算差异
-    eo_difference = abs(male_tpr - female_tpr)
-    
-    metrics['equal_opportunity'] = {
-        'male_tpr': male_tpr,
-        'female_tpr': female_tpr,
-        'difference': eo_difference,
-        'description': '均等机会：合格候选人中不同性别群体的录用率差异'
-    }
-    
-    # === 均等几率 (Equalized Odds) ===
-    # 定义：同时考虑TPR和FPR的公平性指标
-    # 计算公式：|TPR_male - TPR_female| + |FPR_male - FPR_female|
-    # 衡量标准：不仅关注"对的人"是否被同样对待，也关注"错的人"是否被同样误判
-    # 这个指标更难满足，但更全面地反映了公平性
-    
-    # 计算男性真阳性率（TPR）
-    male_tpr = (male_qualified['y_pred'] == 1).mean() if len(male_qualified) > 0 else 0.0
-    
-    # 计算女性真阳性率（TPR）
-    female_tpr = (female_qualified['y_pred'] == 1).mean() if len(female_qualified) > 0 else 0.0
-    
-    # 计算男性假阳性率（FPR）- 在不合格的人中错误录用
-    male_unqualified = results_df[(results_df['gender'] == 'male') & (results_df['y_true'] == 0)]
-    male_fpr = (male_unqualified['y_pred'] == 1).mean() if len(male_unqualified) > 0 else 0.0
-    
-    # 计算女性假阳性率（FPR）
-    female_unqualified = results_df[(results_df['gender'] == 'female') & (results_df['y_true'] == 0)]
-    female_fpr = (female_unqualified['y_pred'] == 1).mean() if len(female_unqualified) > 0 else 0.0
-    
-    # 计算各项差异
-    tpr_diff = abs(male_tpr - female_tpr)
-    fpr_diff = abs(male_fpr - female_fpr)
-    combined_score = tpr_diff + fpr_diff
-    
-    metrics['equalized_odds'] = {
-        'male_tpr': male_tpr,
-        'female_tpr': female_tpr,
-        'tpr_difference': tpr_diff,
-        'male_fpr': male_fpr,
-        'female_fpr': female_fpr,
-        'fpr_difference': fpr_diff,
-        'combined_score': combined_score,
-        'description': '均等几率：综合考虑真阳性率和假阳性率的公平性'
-    }
-    
-    # === 综合评估 ===
-    # 综合考虑统计均等因素均等机会，给出一个总体公平性得分
-    overall_score = 1 - (sp_difference + eo_difference) / 2
-    
-    if overall_score >= 0.9:
-        recommendation = "公平性优秀：模型在不同性别群体间表现均衡"
-    elif overall_score >= 0.8:
-        recommendation = "公平性良好：存在轻微偏见，可接受"
-    elif overall_score >= 0.7:
-        recommendation = "公平性一般：建议进行偏见消解"
-    else:
-        recommendation = "公平性问题严重：需要进行偏见消解干预"
-    
-    metrics['summary'] = {
-        'overall_fairness_score': overall_score,
-        'recommendation': recommendation
-    }
-    
-    return metrics
-
-
-def debias_by_resampling(data, target_col='hired', protected_attr='gender'):
-    """
-    基于数据重采样的偏见消解方法
-    
-    该函数通过调整训练数据的分布来减少偏见。
-    采用的策略：
-    1. 识别存在偏见的样本区间（中等能力区间偏见最明显）
-    2. 在该区间内，提高女性的录用概率
-    3. 在该区间内，适当降低男性的录用概率
-    4. 保持高能力和低能力候选人的录用决策不变
-    
-    这种方法的原理是：在能力边缘（极高或极低），决策通常是一致的；
-    偏见主要体现在中等能力区间的模糊地带。
-    
-    参数:
-        data (pd.DataFrame): 原始数据集
-        target_col (str): 目标列名
-        protected_attr (str): 受保护的属性列名
-    
-    返回:
-        pd.DataFrame: 经过偏见消解处理的数据集
-    """
-    df = data.copy()
-    
-    # 分离男性和女性数据
-    male_data = df[df['gender'] == 'male']
-    female_data = df[df['gender'] == 'female']
-    
-    # 计算当前录用率差异
-    male_hire_rate = male_data[target_col].mean()
-    female_hire_rate = female_data[target_col].mean()
-    original_gap = abs(male_hire_rate - female_hire_rate)
-    
-    print(f"[偏见消解前] 男性录用率: {male_hire_rate:.2%}, 女性录用率: {female_hire_rate:.2%}, 差异: {original_gap:.2%}")
-    
-    # 计算综合能力得分
-    # 使用与数据生成时相同的权重
-    ability_score = (
-        df['skill_score'] * 0.3 +
-        df['interview_score'] * 0.4 +
-        df['experience_years'] * 2 +
-        df['education_level'] * 5
-    )
-    
-    # 计算能力分数的分位数，用于确定调整区间
-    q25 = ability_score.quantile(0.25)
-    q75 = ability_score.quantile(0.75)
-    median = ability_score.median()
-    
-    # 偏见主要存在于中等能力区间（Q25到Q75之间）
-    # 在这个区间内，对录用决策进行微调
-    mask_middle_ability = (ability_score >= q25) & (ability_score <= q75)
-    
-    # === 策略：标签翻转调整 ===
-    # 对于中等能力区间的候选人，根据性别和当前录用状态进行调整
-    
-    # 1. 对中等能力区间的女性未被录用者：提高录用概率
-    # 条件：女性 + 中等能力 + 未录用
-    female_candidates = df[(df['gender'] == 'female') & mask_middle_ability & (df[target_col] == 0)]
-    
-    # 计算应该翻转的比例（目标是让女性录用率接近男性）
-    # 需要增加的女性录用数
-    target_flip_rate = min(0.35, original_gap * 1.5)  # 翻转35%或与差距相关
-    
-    if len(female_candidates) > 0:
-        flip_count = int(len(female_candidates) * target_flip_rate)
-        flip_indices = female_candidates.sample(n=min(flip_count, len(female_candidates)), 
-                                                  random_state=42).index
-        df.loc[flip_indices, target_col] = 1
-        print(f"  [调整] 将 {len(flip_indices)} 名中等能力女性从未录用改为录用")
-    
-    # 2. 对中等能力区间的男性被录用者：降低录用概率
-    # 条件：男性 + 中等能力 + 已录用
-    male_candidates = df[(df['gender'] == 'male') & mask_middle_ability & (df[target_col] == 1)]
-    
-    # 计算应该翻转的比例
-    # 需要减少的男性录用数
-    target_flip_rate_male = min(0.20, original_gap)  # 翻转20%或与差距相关
-    
-    if len(male_candidates) > 0:
-        flip_count = int(len(male_candidates) * target_flip_rate_male)
-        flip_indices = male_candidates.sample(n=min(flip_count, len(male_candidates)), 
-                                                random_state=42).index
-        df.loc[flip_indices, target_col] = 0
-        print(f"  [调整] 将 {len(flip_indices)} 名中等能力男性从录用改为未录用")
-    
-    # 计算调整后的录用率
-    male_hire_rate_new = df[df['gender'] == 'male'][target_col].mean()
-    female_hire_rate_new = df[df['gender'] == 'female'][target_col].mean()
-    new_gap = abs(male_hire_rate_new - female_hire_rate_new)
-    
-    print(f"[偏见消解后] 男性录用率: {male_hire_rate_new:.2%}, 女性录用率: {female_hire_rate_new:.2%}, 差异: {new_gap:.2%}")
-    print(f"[偏见改善] 录用率差异从 {original_gap:.2%} 降至 {new_gap:.2%}，改善 {(original_gap-new_gap)/original_gap:.1%}")
     
     return df
 
 
-def print_fairness_report(metrics, title="公平性评估报告"):
+def diagnose_bias(df: pd.DataFrame, sensitive_attrs: List[str]) -> Dict[str, Any]:
     """
-    格式化输出公平性评估报告
+    诊断数据集中的偏见来源。
     
-    参数:
-        metrics (dict): compute_fairness_metrics 返回的指标字典
-        title (str): 报告标题
+    分析敏感属性在各特征中的分布差异，以及正类标签在不同群体间的比例。
+    
+    Args:
+        df: 包含数据的数据框
+        sensitive_attrs: 敏感属性列表，如 ['gender', 'region']
+    
+    Returns:
+        Dict: 包含诊断报告的字典
     """
-    print(f"\n{'='*60}")
-    print(f"{title:^60}")
-    print(f"{'='*60}")
+    report = {
+        'total_samples': len(df),
+        'groups': {},
+        'positive_rates': {},
+        'feature_means': {}
+    }
     
-    print(f"\n【统计均等 (Statistical Parity)】")
-    sp = metrics['statistical_parity']
-    print(f"  - 男性预测录用率: {sp['male_positive_rate']:.2%}")
-    print(f"  - 女性预测录用率: {sp['female_positive_rate']:.2%}")
-    print(f"  - 差异: {sp['difference']:.2%}")
-    print(f"  - 说明: {sp['description']}")
+    # 实现群体统计
+    for attr in sensitive_attrs:
+        groups = df[attr].unique()
+        group_stats = {}
+        
+        for group in groups:
+            mask = df[attr] == group
+            group_data = df[mask]
+            
+            # 计算每个群体的样本数
+            count = len(group_data)
+            
+            # 计算正类率（使用真实决策）
+            positive_rate = group_data['decision'].mean() if count > 0 else 0
+            
+            group_stats[group] = {
+                'count': count,
+                'positive_rate': positive_rate
+            }
+        
+        report['groups'][attr] = group_stats
     
-    print(f"\n【均等机会 (Equal Opportunity)】")
-    eo = metrics['equal_opportunity']
-    print(f"  - 男性真阳性率(TPR): {eo['male_tpr']:.2%}")
-    print(f"  - 女性真阳性率(TPR): {eo['female_tpr']:.2%}")
-    print(f"  - 差异: {eo['difference']:.2%}")
-    print(f"  - 说明: {eo['description']}")
+    # 计算整体正类率
+    overall_positive_rate = df['decision'].mean()
+    report['overall_positive_rate'] = overall_positive_rate
     
-    print(f"\n【均等几率 (Equalized Odds)】")
-    eod = metrics['equalized_odds']
-    print(f"  - TPR差异: {eod['tpr_difference']:.2%}")
-    print(f"  - FPR差异: {eod['fpr_difference']:.2%}")
-    print(f"  - 综合分数: {eod['combined_score']:.2%}")
-    print(f"  - 说明: {eod['description']}")
+    # 计算各敏感属性下不同群体的正类率差异
+    for attr in sensitive_attrs:
+        groups = df[attr].unique()
+        if len(groups) >= 2:
+            positive_rates = [report['groups'][attr][g]['positive_rate'] for g in groups]
+            report['positive_rates'][attr] = max(positive_rates) - min(positive_rates)
     
-    print(f"\n【综合评估】")
-    summary = metrics['summary']
-    print(f"  - 公平性得分: {summary['overall_fairness_score']:.2%}")
-    print(f"  - 建议: {summary['recommendation']}")
+    # 计算特征均值对比
+    numeric_cols = ['age', 'education', 'experience', 'skill_score']
+    for attr in sensitive_attrs:
+        attr_feature_means = {}
+        for group in df[attr].unique():
+            mask = df[attr] == group
+            group_data = df[mask]
+            attr_feature_means[int(group)] = {
+                col: group_data[col].mean() for col in numeric_cols
+            }
+        report['feature_means'][attr] = attr_feature_means
     
-    print(f"\n{'='*60}\n")
+    return report
+
+
+def statistical_parity_difference(y_pred: np.ndarray, sensitive_attr: np.ndarray) -> float:
+    """
+    计算统计均等性差异 (Statistical Parity Difference)。
+    
+    公式: SPD = P(Ŷ=1|A=1) - P(Ŷ=1|A=0)
+    
+    理想情况下，SPD 应接近 0。绝对值越大，说明偏见越严重。
+    
+    Args:
+        y_pred: 预测标签数组
+        sensitive_attr: 敏感属性数组
+    
+    Returns:
+        float: 统计均等性差异
+    """
+    # 将输入转换为 numpy 数组
+    y_pred = np.array(y_pred)
+    sensitive_attr = np.array(sensitive_attr)
+    
+    # 计算敏感属性为1时的正类预测率
+    mask_1 = sensitive_attr == 1
+    rate_1 = y_pred[mask_1].mean() if mask_1.sum() > 0 else 0.0
+    
+    # 计算敏感属性为0时的正类预测率
+    mask_0 = sensitive_attr == 0
+    rate_0 = y_pred[mask_0].mean() if mask_0.sum() > 0 else 0.0
+    
+    # 返回差异
+    spd = rate_1 - rate_0
+    return float(spd)
+
+
+def equalized_odds_difference(y_pred: np.ndarray, y_true: np.ndarray, 
+                               sensitive_attr: np.ndarray) -> float:
+    """
+    计算均等机会差异 (Equalized Odds Difference)。
+    
+    公式: EOD = |TPR(A=1) - TPR(A=0)| + |FPR(A=1) - FPR(A=0)|
+    
+    衡量不同群体在真阳性率和假阳性率上的差异。
+    
+    Args:
+        y_pred: 预测标签数组
+        y_true: 真实标签数组
+        sensitive_attr: 敏感属性数组
+    
+    Returns:
+        float: 均等机会差异
+    """
+    # 将输入转换为 numpy 数组
+    y_pred = np.array(y_pred)
+    y_true = np.array(y_true)
+    sensitive_attr = np.array(sensitive_attr)
+    
+    def compute_tpr_fpr(y_pred, y_true):
+        """计算真阳性率和假阳性率"""
+        # 真阳性率：真实为正且预测为正的比例
+        true_positive = ((y_pred == 1) & (y_true == 1)).sum()
+        actual_positive = (y_true == 1).sum()
+        tpr = true_positive / actual_positive if actual_positive > 0 else 0.0
+        
+        # 假阳性率：真实为负但预测为正的比例
+        false_positive = ((y_pred == 1) & (y_true == 0)).sum()
+        actual_negative = (y_true == 0).sum()
+        fpr = false_positive / actual_negative if actual_negative > 0 else 0.0
+        
+        return tpr, fpr
+    
+    # 计算敏感属性为1的群体的 TPR 和 FPR
+    mask_1 = sensitive_attr == 1
+    if mask_1.sum() > 0:
+        tpr_1, fpr_1 = compute_tpr_fpr(y_pred[mask_1], y_true[mask_1])
+    else:
+        tpr_1, fpr_1 = 0.0, 0.0
+    
+    # 计算敏感属性为0的群体的 TPR 和 FPR
+    mask_0 = sensitive_attr == 0
+    if mask_0.sum() > 0:
+        tpr_0, fpr_0 = compute_tpr_fpr(y_pred[mask_0], y_true[mask_0])
+    else:
+        tpr_0, fpr_0 = 0.0, 0.0
+    
+    # 计算均等机会差异
+    eod = abs(tpr_1 - tpr_0) + abs(fpr_1 - fpr_0)
+    return float(eod)
+
+
+def calibration_deviation(y_pred: np.ndarray, y_true: np.ndarray,
+                          sensitive_attr: np.ndarray, n_bins: int = 10) -> float:
+    """
+    计算校准性偏差 (Calibration Deviation)。
+    
+    将预测概率分桶，计算每个桶内实际正类率与预测概率的差距。
+    
+    Args:
+        y_pred: 预测标签数组
+        y_true: 真实标签数组
+        sensitive_attr: 敏感属性数组
+        n_bins: 分桶数量
+    
+    Returns:
+        float: 校准性偏差（平均绝对误差）
+    """
+    # 将输入转换为 numpy 数组
+    y_pred = np.array(y_pred)
+    y_true = np.array(y_true)
+    sensitive_attr = np.array(sensitive_attr)
+    
+    # 由于 y_pred 是二值标签，我们需要计算每个群体的校准性
+    # 方法：将数据按敏感属性分组，分别计算校准性偏差后取平均
+    
+    deviations = []
+    
+    for group in np.unique(sensitive_attr):
+        mask = sensitive_attr == group
+        y_pred_group = y_pred[mask]
+        y_true_group = y_true[mask]
+        
+        if mask.sum() == 0:
+            continue
+        
+        # 计算该群体的校准性
+        # 对于二值预测，校准性可以通过比较预测为1的比例和真实为1的比例
+        pred_rate = y_pred_group.mean()
+        true_rate = y_true_group.mean()
+        
+        # 绝对偏差
+        deviation = abs(pred_rate - true_rate)
+        deviations.append(deviation)
+    
+    # 返回平均校准性偏差
+    return float(np.mean(deviations)) if deviations else 0.0
+
+
+def resample_debiasing(X: pd.DataFrame, y: np.ndarray, 
+                       sensitive_attr: str) -> Tuple[pd.DataFrame, np.ndarray]:
+    """
+    使用重采样技术进行偏见消解。
+    
+    对过采样不足的群体进行上采样，使各群体的样本量均衡。
+    
+    Args:
+        X: 特征数据框
+        y: 标签数组
+        sensitive_attr: 敏感属性列名
+    
+    Returns:
+        Tuple[pd.DataFrame, np.ndarray]: 重采样后的特征和标签
+    """
+    # 确保 X 包含敏感属性列
+    X_with_attr = X.copy()
+    if sensitive_attr not in X_with_attr.columns:
+        raise ValueError(f"敏感属性列 '{sensitive_attr}' 不在特征中")
+    
+    # 统计各群体的样本数量
+    groups = X_with_attr[sensitive_attr].unique()
+    group_counts = {g: (X_with_attr[sensitive_attr] == g).sum() for g in groups}
+    
+    # 找出样本最少的群体
+    min_count = min(group_counts.values())
+    
+    # 对每个群体进行上采样，使样本量与最少的群体持平
+    resampled_dfs = []
+    
+    for group in groups:
+        mask = X_with_attr[sensitive_attr] == group
+        group_X = X_with_attr[mask]
+        group_y = y[mask.values]
+        
+        current_count = group_counts[group]
+        
+        # 如果当前群体的样本数大于最小值，进行下采样
+        # 如果小于最小值，进行上采样
+        if current_count > min_count:
+            # 随机下采样
+            indices = np.random.choice(len(group_X), min_count, replace=False)
+            resampled_dfs.append(group_X.iloc[indices])
+            resampled_ys.append(group_y[indices])
+        else:
+            # 上采样（带替换抽样）
+            indices = np.random.choice(len(group_X), min_count, replace=True)
+            resampled_dfs.append(group_X.iloc[indices])
+            resampled_ys.append(group_y[indices])
+    
+    # 合并重采样数据
+    X_resampled = pd.concat(resampled_dfs, axis=0).reset_index(drop=True)
+    y_resampled = np.concatenate(resampled_ys)
+    
+    # 打乱数据顺序
+    shuffle_indices = np.random.permutation(len(X_resampled))
+    X_resampled = X_resampled.iloc[shuffle_indices].reset_index(drop=True)
+    y_resampled = y_resampled[shuffle_indices]
+    
+    return X_resampled, y_resampled
+
+
+def train_simple_model(X: pd.DataFrame, y: np.ndarray) -> np.ndarray:
+    """
+    训练一个简单的模型用于预测。
+    
+    使用逻辑回归模型（通过梯度下降实现）。
+    
+    Args:
+        X: 特征数据框
+        y: 标签数组
+    
+    Returns:
+        np.ndarray: 预测标签数组
+    """
+    # 将数据标准化
+    X_norm = (X - X.mean()) / (X.std() + 1e-8)
+    X_matrix = X_norm.values
+    
+    # 初始化权重
+    n_features = X_matrix.shape[1]
+    weights = np.zeros(n_features)
+    bias = 0
+    
+    # 梯度下降训练
+    learning_rate = 0.1
+    n_epochs = 1000
+    
+    for epoch in range(n_epochs):
+        # 计算预测概率
+        linear_output = np.dot(X_matrix, weights) + bias
+        prob = 1 / (1 + np.exp(-np.clip(linear_output, -500, 500)))
+        
+        # 计算梯度
+        error = prob - y
+        grad_weights = np.dot(X_matrix.T, error) / len(y)
+        grad_bias = np.mean(error)
+        
+        # 更新权重
+        weights -= learning_rate * grad_weights
+        bias -= learning_rate * grad_bias
+    
+    # 预测
+    linear_output = np.dot(X_matrix, weights) + bias
+    prob = 1 / (1 + np.exp(-np.clip(linear_output, -500, 500)))
+    y_pred = (prob >= 0.5).astype(int)
+    
+    return y_pred
+
+
+def evaluate_fairness(y_true: np.ndarray, y_pred: np.ndarray, 
+                      sensitive_attr: np.ndarray) -> Dict[str, float]:
+    """
+    评估模型的公平性指标。
+    
+    Args:
+        y_true: 真实标签数组
+        y_pred: 预测标签数组
+        sensitive_attr: 敏感属性数组
+    
+    Returns:
+        Dict[str, float]: 包含三个公平性指标的字典
+    """
+    spd = statistical_parity_difference(y_pred, sensitive_attr)
+    eod = equalized_odds_difference(y_pred, y_true, sensitive_attr)
+    cd = calibration_deviation(y_pred, y_true, sensitive_attr)
+    
+    return {
+        'statistical_parity_difference': spd,
+        'equalized_odds_difference': eod,
+        'calibration_deviation': cd
+    }
+
+
+def print_diagnosis_report(report: Dict[str, Any]) -> None:
+    """
+    打印偏见诊断报告。
+    
+    Args:
+        report: 诊断报告字典
+    """
+    print("\n" + "="*60)
+    print("偏见诊断报告")
+    print("="*60)
+    print(f"总样本数: {report['total_samples']}")
+    print(f"整体正类率: {report['overall_positive_rate']:.4f}")
+    
+    for attr, stats in report['groups'].items():
+        attr_name = "性别" if attr == 'gender' else "地区"
+        print(f"\n【{attr_name}】")
+        for group, info in stats.items():
+            group_name = "男性/发达地区" if group == 1 else "女性/欠发达地区"
+            print(f"  {group_name}: 样本数={info['count']}, 正类率={info['positive_rate']:.4f}")
+        
+        if attr in report['positive_rates']:
+            print(f"  正类率差异: {report['positive_rates'][attr]:.4f}")
+    
+    print("\n" + "="*60)
+
+
+def print_fairness_metrics(metrics: Dict[str, float], 
+                           label: str = "当前") -> None:
+    """
+    打印公平性指标。
+    
+    Args:
+        metrics: 公平性指标字典
+        label: 指标标签（如"消解前"、"消解后"）
+    """
+    print(f"\n【{label}公平性指标】")
+    print(f"  统计均等性差异 (SPD): {metrics['statistical_parity_difference']:.4f}")
+    print(f"  均等机会差异 (EOD): {metrics['equalized_odds_difference']:.4f}")
+    print(f"  校准性偏差 (CD): {metrics['calibration_deviation']:.4f}")
+    
+    # 公平性判定
+    spd_ok = abs(metrics['statistical_parity_difference']) < 0.1
+    eod_ok = abs(metrics['equalized_odds_difference']) < 0.1
+    cd_ok = abs(metrics['calibration_deviation']) < 0.1
+    
+    print(f"\n  公平性评估: ", end="")
+    if spd_ok and eod_ok and cd_ok:
+        print("✓ 合格")
+    else:
+        print("✗ 存在偏见")
+        if not spd_ok:
+            print("    - 统计均等性存在差异")
+        if not eod_ok:
+            print("    - 均等机会存在差异")
+        if not cd_ok:
+            print("    - 校准性存在偏差")
 
 
 def main():
     """
-    主函数：演示偏见检测与公平性评估的完整流程
-    
-    流程包括：
-    1. 生成带偏见的模拟招聘数据
-    2. 训练逻辑回归模型
-    3. 计算公平性指标（偏见检测）
-    4. 执行偏见消解（数据重采样）
-    5. 重新训练并评估消解效果
-    6. 输出对比分析报告
+    主函数：执行偏见检测与公平性度量完整流程。
     """
-    print("="*60)
-    print("算法偏见检测与公平性度量演示")
-    print("课程《人工智能赋能社会科学》- 算法偏见与数据治理")
-    print("="*60)
+    print("\n" + "#"*60)
+    print("# 算法偏见检测与公平性度量")
+    print("#"*60)
     
-    # 设置随机种子确保可复现
-    np.random.seed(42)
+    # Step 1: 加载数据
+    print("\n[Step 1] 加载数据...")
+    df = load_data()
+    print(f"数据集大小: {len(df)} 样本")
+    print(f"特征列: {list(df.columns)}")
     
-    # === 第一步：生成带偏见的招聘数据 ===
-    print("\n[Step 1] 生成带偏见的招聘模拟数据...")
-    print("-" * 40)
-    data = generate_biased_recruitment_data(n_samples=1000)
+    # Step 2: 偏见诊断
+    print("\n[Step 2] 偏见来源诊断...")
+    sensitive_attrs = ['gender', 'region']
+    diagnosis = diagnose_bias(df, sensitive_attrs)
+    print_diagnosis_report(diagnosis)
     
-    print(f"\n数据集统计信息:")
-    print(f"  - 总样本数: {len(data)} 条记录")
-    print(f"  - 性别分布: 男性 {(data['gender']=='male').mean():.1%}, 女性 {(data['gender']=='female').mean():.1%}")
-    print(f"  - 整体录用率: {data['hired'].mean():.1%}")
-    print(f"  - 男性录用率: {data[data['gender']=='male']['hired'].mean():.1%}")
-    print(f"  - 女性录用率: {data[data['gender']=='female']['hired'].mean():.1%}")
-    
-    # === 第二步：训练模型并评估偏见 ===
-    print("\n[Step 2] 训练招聘筛选模型...")
-    print("-" * 40)
-    model, X_test, y_test, gender_test, scaler = train_model(data)
-    
-    # 在测试集上评估模型性能
-    y_pred = model.predict(X_test)
-    print(f"模型性能评估:")
-    print(f"  - 准确率: {accuracy_score(y_test, y_pred):.2%}")
-    print(f"  - 精确率: {precision_score(y_test, y_pred):.2%}")
-    print(f"  - 召回率: {recall_score(y_test, y_pred):.2%}")
-    
-    # === 第三步：计算公平性指标 ===
+    # Step 3: 计算公平性指标
     print("\n[Step 3] 计算公平性指标...")
-    print("-" * 40)
-    print("评估模型在不同性别群体间的预测差异...")
-    metrics = compute_fairness_metrics(model, X_test, y_test, gender_test)
-    print_fairness_report(metrics, "偏见检测报告（消解前）")
     
-    # === 第四步：偏见消解 ===
-    print("\n[Step 4] 执行偏见消解（数据重采样）...")
-    print("-" * 40)
-    print("使用能力匹配的重采样方法调整训练数据...")
-    data_debiased = debias_by_resampling(data)
+    # 使用模型预测结果
+    y_true = df['decision'].values
+    y_pred = df['prediction'].values
     
-    # === 第五步：重新训练并评估 ===
-    print("\n[Step 5] 使用消解后数据重新训练模型...")
-    print("-" * 40)
-    model_debiased, X_test_debiased, y_test_debiased, gender_test_debiased, _ = train_model(data_debiased)
+    # 性别公平性
+    print("\n--- 性别维度 ---")
+    gender_metrics = evaluate_fairness(y_true, y_pred, df['gender'].values)
+    print_fairness_metrics(gender_metrics, "性别")
     
-    y_pred_debiased = model_debiased.predict(X_test_debiased)
-    print(f"消解后模型性能评估:")
-    print(f"  - 准确率: {accuracy_score(y_test_debiased, y_pred_debiased):.2%}")
-    print(f"  - 精确率: {precision_score(y_test_debiased, y_pred_debiased):.2%}")
-    print(f"  - 召回率: {recall_score(y_test_debiased, y_pred_debiased):.2%}")
+    # 地区公平性
+    print("\n--- 地区维度 ---")
+    region_metrics = evaluate_fairness(y_true, y_pred, df['region'].values)
+    print_fairness_metrics(region_metrics, "地区")
     
-    # === 第六步：评估消解效果 ===
-    print("\n[Step 6] 评估偏见消解效果...")
-    print("-" * 40)
-    metrics_debiased = compute_fairness_metrics(model_debiased, X_test_debiased, y_test_debiased, gender_test_debiased)
-    print_fairness_report(metrics_debiased, "偏见检测报告（消解后）")
+    # Step 4: 偏见消解
+    print("\n[Step 4] 偏见消解实验...")
     
-    # === 对比分析 ===
-    print("\n[Step 7] 消解效果对比分析")
-    print("-" * 40)
-    print(f"{'指标':<25} {'消解前':<12} {'消解后':<12} {'变化':<10}")
-    print("-" * 40)
+    # 准备特征和标签（包含敏感属性用于重采样）
+    feature_cols = ['gender', 'age', 'education', 'experience', 'skill_score']
+    X = df[feature_cols]
+    y = df['decision'].values
     
-    sp_before = metrics['statistical_parity']['difference']
-    sp_after = metrics_debiased['statistical_parity']['difference']
-    sp_change = sp_before - sp_after
-    print(f"{'统计均等差异':<20} {sp_before:<12.2%} {sp_after:<12.2%} {sp_change:+.2%}")
+    # 消解前评估
+    y_pred_before = df['prediction'].values
+    metrics_before = evaluate_fairness(y_true, y_pred_before, df['gender'].values)
+    print_fairness_metrics(metrics_before, "消解前")
     
-    eo_before = metrics['equal_opportunity']['difference']
-    eo_after = metrics_debiased['equal_opportunity']['difference']
-    eo_change = eo_before - eo_after
-    print(f"{'均等机会差异':<20} {eo_before:<12.2%} {eo_after:<12.2%} {eo_change:+.2%}")
+    # 执行重采样消解
+    print("\n执行重采样消解...")
+    X_resampled, y_resampled = resample_debiasing(X, y, 'gender')
+    print(f"重采样后数据集大小: {len(X_resampled)} 样本")
     
-    eod_before = metrics['equalized_odds']['combined_score']
-    eod_after = metrics_debiased['equalized_odds']['combined_score']
-    eod_change = eod_before - eod_after
-    print(f"{'均等几率综合分数':<17} {eod_before:<12.2%} {eod_after:<12.2%} {eod_change:+.2%}")
+    # 消解后的特征（不包含敏感属性用于训练）
+    train_feature_cols = ['age', 'education', 'experience', 'skill_score']
+    X_train = X_resampled[train_feature_cols]
     
-    fairness_before = metrics['summary']['overall_fairness_score']
-    fairness_after = metrics_debiased['summary']['overall_fairness_score']
-    print(f"{'综合公平性得分':<17} {fairness_before:<12.2%} {fairness_after:<12.2%} {fairness_after-fairness_before:+.2%}")
+    # 使用重采样数据训练新模型
+    print("\n使用重采样数据训练新模型...")
+    y_pred_after = train_simple_model(X_train, y_resampled)
+    metrics_after = evaluate_fairness(y_resampled, y_pred_after, 
+                                      X_resampled['gender'].values)
     
-    print("-" * 40)
+    print_fairness_metrics(metrics_after, "消解后")
     
-    # === 结论 ===
-    print("\n【结论与讨论】")
-    print("-" * 40)
-    
-    if sp_change > 0 and eo_change > 0:
-        print("✓ 偏见消解成功！统计均等和均等机会指标均有改善。")
-    elif sp_change > 0 or eo_change > 0:
-        print("◐ 部分偏见消解成功！至少一个公平性指标有所改善。")
-    else:
-        print("✗ 偏见消解效果不明显，可能需要调整策略或参数。")
-    
-    print(f"""
-在实际应用中，选择哪种公平性指标取决于具体场景：
-- 统计均等：关注"谁能获得机会"，适合招聘配额等场景
-- 均等机会：关注"合格者是否被平等对待"，更适合能力评估场景
-- 均等几率：最严格的公平性标准，但可能难以同时满足所有条件
-
-本项目演示了基于数据重采样的偏见消解方法。
-其他方法还包括：
-1. 对抗训练（Adversarial Debiasing）
-2. 公平性约束优化（Fairness Constraints）
-3. 后处理校正（Post-processing Calibration）
-""")
-    
+    # 对比分析
+    print("\n" + "="*60)
+    print("消解效果对比")
     print("="*60)
-    print("演示完成")
+    
+    for key in metrics_before:
+        before = metrics_before[key]
+        after = metrics_after[key]
+        change = after - before
+        improvement = "↓ 改善" if abs(after) < abs(before) else "↑ 恶化"
+        print(f"{key}: {before:.4f} → {after:.4f} ({improvement}, 变化: {change:.4f})")
+    
+    # 验证消解效果
+    improved_count = sum(1 for key in metrics_before 
+                        if abs(metrics_after[key]) < abs(metrics_before[key]))
+    
+    print("\n" + "="*60)
+    print("分析结论")
     print("="*60)
+    print(f"1. 模型预测中存在明显的性别偏见和地区偏见")
+    print(f"2. 统计均等性差异显示不同群体的通过率存在显著差异")
+    print(f"3. 重采样消解使 {improved_count}/3 个指标得到改善")
+    print("4. 注意：Impossibility Theorem 表明三种公平性指标可能无法同时达到最优")
+    print("   - 统计均等性和均等机会在某些条件下存在不可调和的权衡")
 
 
 if __name__ == "__main__":

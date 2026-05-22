@@ -12,7 +12,7 @@
   "styleKey": "concept",
   "lessons": 8,
   "cover": "人",
-  "status": "PPT 生成中",
+  "status": "项目代码已生成",
   "githubRepo": "likefallwind/aiforss",
   "slideImageSize": {
     "width": 1920,
@@ -350,39 +350,6 @@
       ],
       "currentFile": "project.md"
     },
-    "c8": {
-      "title": "算法偏见检测与公平性度量",
-      "description": "从招聘数据到模型公平性：检测算法偏见来源，实现偏见消解",
-      "manifest": [
-        {
-          "path": "src/main.py",
-          "lang": "py",
-          "role": "scaffold",
-          "purpose": "脚手架文件，定义数据生成、偏见检测、公平性度量、偏见消解的函数框架",
-          "exports": "generate_biased_recruitment_data(n_samples) -> DataFrame; train_model(data) -> LogisticRegression; compute_fairness_metrics(model, data, protected_attr) -> dict; debias_by_resampling(data) -> DataFrame",
-          "dependsOn": []
-        },
-        {
-          "path": "answer/main.py",
-          "lang": "py",
-          "role": "answer",
-          "purpose": "参考实现，包含 Task 1-3 的完整代码",
-          "exports": "generate_biased_recruitment_data(n_samples) -> DataFrame; train_model(data) -> LogisticRegression; compute_fairness_metrics(model, data, protected_attr) -> dict; debias_by_resampling(data) -> DataFrame",
-          "dependsOn": []
-        },
-        {
-          "path": "tests/test_answer.py",
-          "lang": "py",
-          "role": "test",
-          "purpose": "pytest 测试，只验证 answer 目录下的参考实现",
-          "exports": "",
-          "dependsOn": [
-            "answer/main.py"
-          ]
-        }
-      ],
-      "currentFile": "project.md"
-    },
     "c6": {
       "title": "人机协作对话助手",
       "description": "通过 Function Calling 实现工具调用、多轮对话与人格化共情响应的最小可运行示例",
@@ -410,6 +377,39 @@
           "purpose": "验证 answer 目录中核心功能的正确性",
           "exports": "测试类: TestConversationSystem",
           "dependsOn": []
+        }
+      ],
+      "currentFile": "project.md"
+    },
+    "c8": {
+      "title": "算法偏见检测与公平性度量",
+      "description": "通过真实数据集练习识别算法偏见来源、计算公平性指标、运用偏见消解技术",
+      "manifest": [
+        {
+          "path": "src/main.py",
+          "lang": "py",
+          "role": "scaffold",
+          "purpose": "脚手架文件，包含偏见诊断、指标计算、消解的代码框架，学生填写 TODO 部分",
+          "exports": "函数：load_data() 返回 DataFrame；diagnose_bias(df, sensitive_attrs) 返回诊断字典；statistical_parity_difference(y_pred, sensitive_attr) 返回浮点数；equalized_odds_difference(y_pred, y_true, sensitive_attr) 返回浮点数；calibration_deviation(y_pred, y_true, sensitive_attr) 返回浮点数；resample_debiasing(X, y, sensitive_attr) 返回重采样后的 X_resample, y_resample；main() 执行完整流程并打印结果",
+          "dependsOn": []
+        },
+        {
+          "path": "answer/main.py",
+          "lang": "py",
+          "role": "answer",
+          "purpose": "参考实现，完整实现所有函数逻辑，可直接运行验证结果",
+          "exports": "函数：load_data()、diagnose_bias(df, sensitive_attrs)、statistical_parity_difference(y_pred, sensitive_attr)、equalized_odds_difference(y_pred, y_true, sensitive_attr)、calibration_deviation(y_pred, y_true, sensitive_attr)、resample_debiasing(X, y, sensitive_attr)、train_simple_model(X, y)、evaluate_fairness(y_true, y_pred, sensitive_attr)、main()",
+          "dependsOn": []
+        },
+        {
+          "path": "tests/test_answer.py",
+          "lang": "py",
+          "role": "test",
+          "purpose": "pytest 测试文件，验证 answer/main.py 中指标计算函数的正确性",
+          "exports": "类：TestFairnessMetrics；方法：test_statistical_parity()、test_equalized_odds()、test_calibration()",
+          "dependsOn": [
+            "answer/main.py"
+          ]
         }
       ],
       "currentFile": "project.md"
@@ -838,11 +838,13 @@
         "body": "人工智能赋能社会科学\n\n大模型在金融经济领域的应用",
         "prompt": "人工智能赋能社会科学\n\n大模型在金融经济领域的应用",
         "script": "欢迎来到《人工智能赋能社会科学》课程。我是你们的讲师，今天这节课要和大家聊一个特别有意思的交叉领域：大模型在金融经济领域能做什么。大家都知道，这两年大模型火得不行，但具体到金融这种专业场景，它到底能派上什么用场？这就是我们这节课要探索的内容。整个讲座分三大部分：先看金融文本怎么分析，再看市场预测怎么做，最后聊聊风险评估和信用评分这些实际应用。不管你是学经济的、管理的，还是做研究的，只要对AI怎么落地感兴趣，这节课都适合你。咱们开始吧。",
-        "imageStatus": "todo",
-        "imageFile": null,
+        "imageStatus": "ready",
+        "imageFile": "lessons/lesson-03-c3/slides/000-cover.png",
         "audioFile": null,
         "imageWarning": null,
-        "promptApproved": false
+        "promptApproved": true,
+        "imageVersion": 1,
+        "imageUpdatedAt": 1779447568190
       },
       {
         "id": "s2",
@@ -1857,7 +1859,7 @@
       }
     ]
   },
-  "updatedAtTs": 1779432918276,
+  "updatedAtTs": 1779447568190,
   "updatedAt": "刚刚",
   "videos": {
     "c1": {
@@ -1875,9 +1877,9 @@
     "repo": "likefallwind/aiforss",
     "branch": "main",
     "repoUrl": "https://github.com/likefallwind/aiforss",
-    "commitUrl": "https://github.com/likefallwind/aiforss/commit/1cfb2431d1147750278df267dba28fbc413b8021",
+    "commitUrl": "https://github.com/likefallwind/aiforss/commit/028aa1132f6f89c83d0b06ed24ee4c48b5211a53",
     "fileCount": 98,
-    "publishedAt": 1779432300904
+    "publishedAt": 1779433060525
   },
   "instructorName": "王一博",
   "instructorAffiliation": "北京中关村学院",
